@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>心理防禦率戰術終端 V4.2 - 雲端版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .card { background-color: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        .input-field { background-color: #334155; border: 1px solid #475569; color: white; border-radius: 0.375rem; padding: 0.5rem; width: 100%; }
+        .btn-primary { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); transition: all 0.2s; }
+        .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+        .status-syncing { color: #fbbf24; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+    <div class="max-w-5xl mx-auto">
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-bold text-blue-400">心理防禦率戰術終端 <span class="text-sm font-normal text-slate-500">v4.2 Cloud</span></h1>
+            <div id="syncStatus" class="text-sm text-slate-400">雲端狀態：就緒</div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="card p-6">
+                <h2 class="text-lg font-semibold mb-4 border-b border-slate-700 pb-2">新進場 / 加碼</h2>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm mb-1 text-slate-400">買入價格</label>
+                        <input type="number" id="buyPrice" class="input-field" step="0.01" placeholder="例如: 54">
+                    </div>
+                    <div>
+                        <label class="block text-sm mb-1 text-slate-400">買入股數</label>
+                        <input type="number" id="buyQty" class="input-field" placeholder="例如: 1000">
+                    </div>
+                    <button onclick="addPosition()" class="w-full btn-primary py-2 rounded-md font-bold text-white">確認建倉</button>
+                </div>
+
+                <div class="mt-8 border-t border-slate-700 pt-4">
+                    <h2 class="text-lg font-semibold mb-4 text-emerald-400">戰利品注入 (水庫)</h2>
+                    <input type="number" id="manualProfit" class="input-field mb-2" placeholder="手動注入金額 (元)">
+                    <button onclick="injectProfit()" class="w-full bg-emerald-600 hover:bg-emerald-500 py-2 rounded-md font-bold text-white transition">注入水庫</button>
+                </div>
+            </div>
+
+            <div class="card p-6 md:col-span-2">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                    <div class="bg-slate-800 p-3 rounded-lg text-center">
+                        <div class="text-xs text-slate-400">當前持股</div>
+                        <div id="totalQty" class="text-xl font-mono">0</div>
+                    </div>
+                    <div class="bg-slate-800 p-3 rounded-lg text-center border-l-4 border-blue-500">
+                        <div class="text-xs text-slate-400">平均帳面成本</div>
+                        <div id="avgCost" class="text-xl font-mono text-blue-300">0</div>
+                    </div>
+                    <div class="bg-slate-800 p-3 rounded-lg text-center border-l-4 border-emerald-500">
+                        <div class="text-xs text-slate-400">水庫總點數</div>
+                        <div id="profitPool" class="text-xl font-mono text-emerald-400">0</div>
+                    </div>
+                    <div class="bg-slate-800 p-3 rounded-lg text-center border-l-4 border-red-500">
+                        <div class="text-xs text-slate-400 font-bold">心理防禦價</div>
+                        <div id="defensePrice" class="text-xl font-mono text-red-400">0</div>
+                    </div>
+                </div>
+
+                <h2 class="text-lg font-semibold mb-3">庫存明細 (點擊以配對賣出)</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-800 text-slate-300 uppercase">
+                            <tr>
+                                <th class="p-2">價格</th>
+                                <th class="p-2">股數</th>
+                                <th class="p-2">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventoryList">
+                            </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-6 p-6">
+            <h2 class="text-lg font-semibold mb-2">已實現利潤統計：<span id="realizedPnL" class="text-emerald-400">0</span> 元</h2>
+        </div>
+    </div>
+
+    <script>
+        // ⚠️ 請換成你自己部署的 GAS URL
+        const GAS_URL = 'https://script.google.com/macros/s/你的GAS網址/exec';
+
+        let state = {
+            inventory: [], // {price, qty, id}
+            profitPool: 0,
+            realizedPnL: 0
+        };
+
+        // --- 核心計算邏輯 ---
+        function updateUI() {
+            const inventoryList = document.getElementById('inventoryList');
+            inventoryList.innerHTML = '';
+            
+            let totalCost = 0;
+            let totalQty = 0;
+
+            state.inventory.forEach((item, index) => {
+                totalCost += item.price * item.qty;
+                totalQty += item.qty;
+
+                const row = document.createElement('tr');
+                row.className = 'border-b border-slate-700 hover:bg-slate-800';
+                row.innerHTML = `
+                    <td class="p-2 font-mono">${item.price}</td>
+                    <td class="p-2 font-mono">${item.qty}</td>
+                    <td class="p-2">
+                        <button onclick="sellItem(${index})" class="text-red-400 hover:text-red-300 font-bold">賣出結算</button>
+                    </td>
+                `;
+                inventoryList.appendChild(row);
+            });
+
+            const avgCost = totalQty > 0 ? (totalCost / totalQty).toFixed(2) : 0;
+            const defensePrice = totalQty > 0 ? ((totalCost - state.profitPool) / totalQty).toFixed(2) : 0;
+
+            document.getElementById('totalQty').innerText = totalQty;
+            document.getElementById('avgCost').innerText = avgCost;
+            document.getElementById('profitPool').innerText = state.profitPool.toLocaleString();
+            document.getElementById('realizedPnL').innerText = state.realizedPnL.toLocaleString();
+            document.getElementById('defensePrice').innerText = defensePrice;
+
+            saveToCloud();
+        }
+
+        function addPosition() {
+            const price = parseFloat(document.getElementById('buyPrice').value);
+            const qty = parseInt(document.getElementById('buyQty').value);
+
+            if (price && qty) {
+                state.inventory.push({ price, qty, id: Date.now() });
+                document.getElementById('buyPrice').value = '';
+                document.getElementById('buyQty').value = '';
+                updateUI();
+            }
+        }
+
+        function sellItem(index) {
+            const sellPrice = prompt("請輸入賣出成交價:");
+            if (sellPrice === null) return;
+
+            const item = state.inventory[index];
+            const profit = (parseFloat(sellPrice) - item.price) * item.qty;
+
+            if (confirm(`結算完成！\n這波獲利: ${profit.toFixed(0)} 元\n將全數注入水庫以降低整體成本。`)) {
+                state.profitPool += profit;
+                state.realizedPnL += profit;
+                state.inventory.splice(index, 1);
+                updateUI();
+            }
+        }
+
+        function injectProfit() {
+            const val = parseFloat(document.getElementById('manualProfit').value);
+            if (val) {
+                state.profitPool += val;
+                state.realizedPnL += val;
+                document.getElementById('manualProfit').value = '';
+                updateUI();
+            }
+        }
+
+        // --- 雲端同步邏輯 ---
+        async function saveToCloud() {
+            document.getElementById('syncStatus').innerText = '正在備份至雲端...';
+            document.getElementById('syncStatus').className = 'status-syncing';
+            
+            try {
+                await fetch(GAS_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    body: JSON.stringify(state)
+                });
+                setTimeout(() => {
+                    document.getElementById('syncStatus').innerText = '雲端狀態：已同步';
+                    document.getElementById('syncStatus').className = 'text-sm text-emerald-400';
+                }, 1000);
+            } catch (e) {
+                document.getElementById('syncStatus').innerText = '同步失敗';
+                document.getElementById('syncStatus').className = 'text-sm text-red-400';
+            }
+        }
+
+        async function loadFromCloud() {
+            try {
+                const response = await fetch(GAS_URL);
+                const data = await response.json();
+                if (data) {
+                    state = data;
+                    updateUI();
+                }
+            } catch (e) { console.log("首次載入或無雲端資料"); }
+        }
+
+        window.onload = loadFromCloud;
+    </script>
+</body>
+</html>
